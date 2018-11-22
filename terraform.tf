@@ -40,6 +40,22 @@ variable "public_subnets" {
   type    = "list"
   default = ["10.0.6.0/25","10.0.6.128/25","10.0.7.0/25"]
 }
+
+variable "rds_engine" {
+  type = "string"
+  default = "aurora-postgresql"
+}
+
+variable "rds_version" {
+  type = "string"
+  default = "9.6.8"
+}
+
+variable "rds_instance_size" {
+  type = "string"
+  default = "db.r4.large"
+}
+
 ##################################################################################################################################
 ########################### VPC Setup ############################################################################################
 
