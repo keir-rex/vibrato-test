@@ -1,3 +1,13 @@
+terraform {
+    backend "s3" {
+      region      = "ap-southeast-2"
+      bucket      = "vibrato-test-app-state"
+      key         = "vibrato-test-app.tfstate"
+      encrypt     = 1
+      kms_key_id  = "arn:aws:kms:ap-southeast-2:501393350350:key/3560f742-7edb-44da-90c6-a6892bc95caa"
+    }
+}
+
 provider "aws" {}
 
 # Data block for current region
