@@ -10,11 +10,17 @@ terraform {
 
 provider "aws" {}
 
+##################################################################################################################################
+########################### Data blocks ##########################################################################################
+
 # Data block for current region
 data "aws_region" "current" {}
 
 # Data block for retrieving list of availability zones dynamically
 data "aws_availability_zones" "available" {}
+
+##################################################################################################################################
+########################### Variable blocks ######################################################################################
 
 # Define a block of IPs sufficiently large for the purpose of this project
 # /21 will give us 2048 IPs which we can divide into 3 private / 3 public subnets (one for each per AZ) 
@@ -34,6 +40,8 @@ variable "public_subnets" {
   type    = "list"
   default = ["10.0.6.0/25","10.0.6.128/25","10.0.7.0/25"]
 }
+##################################################################################################################################
+########################### VPC Setup ############################################################################################
 
 resource "aws_vpc" "main" {
   cidr_block = "${var.cidr_block}"
