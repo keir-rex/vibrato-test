@@ -1,0 +1,15 @@
+[
+  {
+    "name": "techtest-frontend",
+    "image": "TODO",
+    "cpu": 1,
+    "memory": 2048,
+    "essential": true,
+    "portMappings": [
+      {
+        "containerPort": 3000,
+        "hostPort": 80
+      }
+    ]
+  }
+]

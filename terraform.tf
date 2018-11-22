@@ -19,6 +19,9 @@ data "aws_region" "current" {}
 # Data block for retrieving list of availability zones dynamically
 data "aws_availability_zones" "available" {}
 
+# The block below is required to later configure s3 bucket to receive ALB
+data "aws_elb_service_account" "main" {}
+
 ##################################################################################################################################
 ########################### Variable blocks ######################################################################################
 
@@ -93,6 +96,15 @@ resource "aws_subnet" "private" {
   }
 }
 
+resource "aws_internet_gateway" "main_igw" {
+  vpc_id = "${aws_vpc.main.id}"
+
+  tags {
+    Name = "vibrato_techtest-igw"
+    project = "vibrato-techtest"
+  }
+}
+
 ##################################################################################################################################
 ########################### DB Setup #############################################################################################
 
@@ -112,7 +124,7 @@ resource "aws_rds_cluster" "postgres_db_cluster" {
   engine_version          = "${var.rds_version}"
   availability_zones      = ["${data.aws_availability_zones.available.names[0]}","${data.aws_availability_zones.available.names[1]}","${data.aws_availability_zones.available.names[2]}"]
   db_subnet_group_name    = "${aws_db_subnet_group.postgres_db_cluster_subnet_group.name}"
-  database_name           = "vibrato_techtest-postgress_db"
+  database_name           = "techtestdb"
   master_username         = "foo"
   master_password         = "${file("secret_password")}"
   skip_final_snapshot     = true
@@ -139,12 +151,118 @@ resource "aws_rds_cluster_instance" "postgres_db_instances" {
 }
 
 ##################################################################################################################################
-########################### ECS Setup ############################################################################################
+########################### Load Balancer ########################################################################################
 
-resource "aws_ecs_cluster" "cluster" {
-  name = "vibrato_techtest-ecs-cluster"
-  tags {
-    Name = "vibrato_techtest-ecs-cluster"
-    project = "vibrato-techtest"
+resource "aws_security_group" "allow_all" {
+  name        = "allow_all"
+  description = "Allow all inbound traffic"
+  vpc_id      = "${aws_vpc.main.id}"
+
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port       = 0
+    to_port         = 0
+    protocol        = "-1"
+    cidr_blocks     = ["0.0.0.0/0"]
   }
 }
+
+resource "aws_s3_bucket" "alb_logs" {
+  bucket = "vibrato-techtest-alb-logs"
+  acl    = "private"
+  policy = <<EOF
+{
+  "Id": "Policy",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": [
+        "s3:PutObject"
+      ],
+      "Effect": "Allow",
+      "Resource": "arn:aws:s3:::vibrato-techtest-alb-logs/*",
+      "Principal": {
+        "AWS": [
+          "${data.aws_elb_service_account.main.arn}"
+        ]
+      }
+    }
+  ]
+}
+EOF
+
+  tags {
+    Name        = "vibrato_techtest-s3-alb_logs"
+    project     = "vigrato-techtest"
+  }
+}
+
+resource "aws_lb" "test" {
+  name               = "vibrato-techtest-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = ["${aws_security_group.allow_all.id}"]
+  subnets            = ["${aws_subnet.public.*.id}"]
+
+  enable_deletion_protection = true
+
+  access_logs {
+    bucket  = "${aws_s3_bucket.alb_logs.bucket}"
+    prefix  = "vibrato_techtest"
+    enabled = true
+  }
+
+  tags {
+    Name        = "vibrato_techtest-s3-alb_logs"
+    project     = "vigrato-techtest"
+  }
+}
+
+##################################################################################################################################
+########################### ECS Setup ############################################################################################
+
+# resource "aws_ecs_cluster" "cluster" {
+#   name = "vibrato_techtest-ecs-cluster"
+#   tags {
+#     Name = "vibrato_techtest-ecs-cluster"
+#     project = "vibrato-techtest"
+#   }
+# }
+
+# resource "aws_ecr_repository" "techtest_app_repository" {
+#   name = "techtestapp"
+# }
+
+# resource "aws_ecs_task_definition" "ecs_task" {
+#   family                = "vibrato_techtest-ecs_task"
+#   container_definitions = "${file("task-definitions/techtest-frontend-task.json")}"
+# }
+
+# resource "aws_ecs_service" "techtest_app_frontend_service" {
+#   name            = "vibrato_techtest-ecs_service"
+#   cluster         = "${aws_ecs_cluster.cluster.id}"
+#   task_definition = "${aws_ecs_task_definition.ecs_task.arn}"
+#   desired_count   = 3
+
+#   ordered_placement_strategy {
+#     type  = "spread"
+#     field = "instanceId"
+#   }
+
+#   load_balancer {
+#     target_group_arn = "${aws_lb_target_group.foo.arn}"
+#     container_name   = "techtest-frontend"
+#     container_port   = 3000
+#   }
+
+#   placement_constraints {
+#     type       = "memberOf"
+#     expression = "attribute:ecs.availability-zone in [us-west-2a, us-west-2b]"
+#   }
+# }
