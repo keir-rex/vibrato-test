@@ -114,7 +114,7 @@ resource "aws_rds_cluster" "postgres_db_cluster" {
   db_subnet_group_name    = "${aws_db_subnet_group.postgres_db_cluster_subnet_group.name}"
   database_name           = "vibrato_techtest-postgress_db"
   master_username         = "foo"
-  master_password         = "changeme"
+  master_password         = "${file("secret_password")}"
   skip_final_snapshot     = true
   
   tags {
