@@ -137,3 +137,14 @@ resource "aws_rds_cluster_instance" "postgres_db_instances" {
     project = "vibrato-techtest"
   }
 }
+
+##################################################################################################################################
+########################### ECS Setup ############################################################################################
+
+resource "aws_ecs_cluster" "cluster" {
+  name = "vibrato_techtest-ecs-cluster"
+  tags {
+    Name = "vibrato_techtest-ecs-cluster"
+    project = "vibrato-techtest"
+  }
+}
