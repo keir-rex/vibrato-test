@@ -27,6 +27,10 @@ variable "public_subnets" {
 
 resource "aws_vpc" "main" {
   cidr_block = "${var.cidr_block}"
+  tags {
+    Name = "vibrato_techtest-vpc-main"
+    project = "vibrato-techtest"
+  }
 }
 
 # Create a group of public subnets; one for each AZ within the region we launched our VPC
@@ -35,6 +39,11 @@ resource "aws_subnet" "public" {
   vpc_id     = "${aws_vpc.main.id}"
   cidr_block = "${var.public_subnets[count.index]}"
   availability_zone = "${data.aws_availability_zones.available.names[count.index]}"
+  
+  tags {
+    Name = "vibrato_techtest-subnet-public-${data.aws_availability_zones.available.names[count.index]}"
+    project = "vibrato-techtest"
+  }
 }
 
 # Create a group of private subnets; one for each AZ within the region we launched our VPC
@@ -43,4 +52,9 @@ resource "aws_subnet" "private" {
   vpc_id     = "${aws_vpc.main.id}"
   cidr_block = "${var.private_subnets[count.index]}"
   availability_zone = "${data.aws_availability_zones.available.names[count.index]}"
+  
+  tags {
+    Name = "vibrato_techtest-subnet-private-${data.aws_availability_zones.available.names[count.index]}"
+    project = "vibrato-techtest"
+  }
 }
