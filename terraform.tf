@@ -92,3 +92,48 @@ resource "aws_subnet" "private" {
     project = "vibrato-techtest"
   }
 }
+
+##################################################################################################################################
+########################### DB Setup #############################################################################################
+
+resource "aws_db_subnet_group" "postgres_db_cluster_subnet_group" {
+  name       = "vibrato_techtest-db_subnet_group"
+  subnet_ids = ["${aws_subnet.private.*.id}"]
+
+  tags {
+    Name = "vibrato_techtest-db_subnet_group-postgres_db_cluster_subnet_group"
+    project = "vibrato-techtest"
+  }
+}
+
+resource "aws_rds_cluster" "postgres_db_cluster" {
+  cluster_identifier      = "vibrato-techtest-postgres-db-cluster"
+  engine                  = "${var.rds_engine}"
+  engine_version          = "${var.rds_version}"
+  availability_zones      = ["${data.aws_availability_zones.available.names[0]}","${data.aws_availability_zones.available.names[1]}","${data.aws_availability_zones.available.names[2]}"]
+  db_subnet_group_name    = "${aws_db_subnet_group.postgres_db_cluster_subnet_group.name}"
+  database_name           = "vibrato_techtest-postgress_db"
+  master_username         = "foo"
+  master_password         = "changeme"
+  skip_final_snapshot     = true
+  
+  tags {
+    Name = "vibrato_techtest-rds-postgres_db_cluster"
+    project = "vibrato-techtest"
+  }
+}
+
+resource "aws_rds_cluster_instance" "postgres_db_instances" {
+  count                 = 3
+  identifier            = "vibrato-techtest-postgres-db-instance-${count.index}"
+  cluster_identifier    = "${aws_rds_cluster.postgres_db_cluster.id}"
+  db_subnet_group_name  = "${aws_db_subnet_group.postgres_db_cluster_subnet_group.name}"
+  instance_class        = "${var.rds_instance_size}"
+  engine                = "${var.rds_engine}"
+  engine_version        = "${var.rds_version}"
+  
+  tags {
+    Name = "vibrato_techtest-rds-postgres_db_instance-${data.aws_availability_zones.available.names[count.index]}"
+    project = "vibrato-techtest"
+  }
+}
