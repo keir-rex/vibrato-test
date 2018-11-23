@@ -26,7 +26,8 @@ data "aws_elb_service_account" "main" {}
 ########################### Variable blocks ######################################################################################
 
 # Define a block of IPs sufficiently large for the purpose of this project
-# /21 will give us 2048 IPs which we can divide into 3 private / 3 public subnets (one for each per AZ) 
+# /21 will give us 2048 IPs which we can divide into 3 private / 3 public subnets (one for each per AZ)
+# We'll launch our load balancers in the public subnets and the rest of our stack in the private subnets
 variable "cidr_block" {
   type    = "string"
   default = "10.0.0.0/21"
@@ -58,6 +59,20 @@ variable "rds_instance_size" {
   type = "string"
   default = "db.r4.large"
 }
+
+##################################################################################################################################
+########################### Secrets Setup ########################################################################################
+
+# TODO; it doesn't look like we'll need this but I'll leave it here for now
+
+# resource "aws_secretsmanager_secret" "docker_pull_secret" {
+#   name = "docker_pull_secret"
+# }
+
+# resource "aws_secretsmanager_secret_version" "docker_pull_secret" {
+#   secret_id     = "${aws_secretsmanager_secret.docker_pull_secret.id}"
+#   secret_string = "${file("")}"
+# }
 
 ##################################################################################################################################
 ########################### VPC Setup ############################################################################################
@@ -203,20 +218,26 @@ EOF
   }
 }
 
-resource "aws_lb" "test" {
+resource "aws_alb_target_group" "load_balancer-target_group" {
+  name     = "vibrato-techtest-alb-target-grp"
+  port     = 3000 # todo parameterise this
+  protocol = "HTTP"
+  vpc_id   = "${aws_vpc.main.id}"
+}
+
+resource "aws_lb" "load_balancer" {
   name               = "vibrato-techtest-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = ["${aws_security_group.allow_all.id}"]
   subnets            = ["${aws_subnet.public.*.id}"]
 
-  enable_deletion_protection = true
-
-  access_logs {
-    bucket  = "${aws_s3_bucket.alb_logs.bucket}"
-    prefix  = "vibrato_techtest"
-    enabled = true
-  }
+  # Uncomment after development as it makes it easier to iterate 
+  # access_logs {
+  #   bucket  = "${aws_s3_bucket.alb_logs.bucket}"
+  #   prefix  = "vibrato_techtest"
+  #   enabled = true
+  # }
 
   tags {
     Name        = "vibrato_techtest-s3-alb_logs"
@@ -224,45 +245,52 @@ resource "aws_lb" "test" {
   }
 }
 
+resource "aws_alb_listener" "load_balancer_listener" {
+  load_balancer_arn = "${aws_lb.load_balancer.arn}"
+  port              = "80"
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = "${aws_alb_target_group.load_balancer-target_group.arn}"
+  }
+}
+
 ##################################################################################################################################
 ########################### ECS Setup ############################################################################################
 
-# resource "aws_ecs_cluster" "cluster" {
-#   name = "vibrato_techtest-ecs-cluster"
-#   tags {
-#     Name = "vibrato_techtest-ecs-cluster"
-#     project = "vibrato-techtest"
-#   }
-# }
+resource "aws_ecs_cluster" "cluster" {
+  name = "vibrato_techtest-ecs-cluster"
+  tags {
+    Name = "vibrato_techtest-ecs-cluster"
+    project = "vibrato-techtest"
+  }
+}
 
-# resource "aws_ecr_repository" "techtest_app_repository" {
-#   name = "techtestapp"
-# }
+resource "aws_ecr_repository" "techtest_app_repository" {
+  name = "techtestapp"
+}
 
-# resource "aws_ecs_task_definition" "ecs_task" {
-#   family                = "vibrato_techtest-ecs_task"
-#   container_definitions = "${file("task-definitions/techtest-frontend-task.json")}"
-# }
+resource "aws_ecs_task_definition" "ecs_task" {
+  family                = "vibrato_techtest-ecs_task"
+  container_definitions = "${file("task-definitions/techtest-frontend-task.json")}"
+}
 
-# resource "aws_ecs_service" "techtest_app_frontend_service" {
-#   name            = "vibrato_techtest-ecs_service"
-#   cluster         = "${aws_ecs_cluster.cluster.id}"
-#   task_definition = "${aws_ecs_task_definition.ecs_task.arn}"
-#   desired_count   = 3
+resource "aws_ecs_service" "techtest_app_frontend_service" {
+  name            = "vibrato_techtest-ecs_service"
+  cluster         = "${aws_ecs_cluster.cluster.id}"
+  task_definition = "${aws_ecs_task_definition.ecs_task.arn}"
+  desired_count   = 3
+  depends_on = ["aws_alb_listener.load_balancer_listener"]
 
-#   ordered_placement_strategy {
-#     type  = "spread"
-#     field = "instanceId"
-#   }
+  ordered_placement_strategy {
+    type  = "spread"
+    field = "instanceId"
+  }
 
-#   load_balancer {
-#     target_group_arn = "${aws_lb_target_group.foo.arn}"
-#     container_name   = "techtest-frontend"
-#     container_port   = 3000
-#   }
-
-#   placement_constraints {
-#     type       = "memberOf"
-#     expression = "attribute:ecs.availability-zone in [us-west-2a, us-west-2b]"
-#   }
-# }
+  load_balancer {
+    target_group_arn = "${aws_alb_target_group.load_balancer-target_group.arn}"
+    container_name   = "techtest-frontend"
+    container_port   = 3000 # todo parameterise this
+  }
+}
