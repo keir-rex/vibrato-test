@@ -1,3 +1,4 @@
 # We don't want to commit binary files
 .terraform
-secret_password
+secret_postgres_password
+secret_github

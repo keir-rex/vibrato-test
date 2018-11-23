@@ -17,11 +17,11 @@ We need IAM credentials (access-key-id and access-key) with the following
 We will store our Terraform state files in S3. In order to do this we'll need an S3 bucket.
 
 ### KMS
-We'll use KMS to encrypt the state files in S3 in order to prevent any credentials from being stored in SCM. Store the KMS ID in a file named: `kms_key_id`
+We'll use KMS to encrypt the state files in S3 in order to prevent any credentials from being stored in SCM. Store the KMS ID in a file named: `kms_key_id`.
 
 ### Generate a Postgres Password
 - Generate a secure password for postgres. I like to use [xkpasswd](https://xkpasswd.net/s/)
-- Store it in a file named `secret_postgres_password`.
+- Store it in a file named `secret_postgres_password`. This file is ignored in the .gitignore so only the `.encoded` version will be stored in git.
 - We'll next use KMS to encrypt that password for storage at rest in Git:
 
 ```
@@ -34,13 +34,14 @@ aws kms decrypt --ciphertext-blob fileb://secret_postgress_password.encoded --ou
 
 ### Github Token
 - Generate a personal access token a guide is available [here](https://docs.aws.amazon.com/codepipeline/latest/userguide/GitHub-rotate-personal-token-CLI.html). 
-- Store the token in a file named `secret_github`
+- Store the token in a file named `secret_github`. This file is ignored in the .gitignore so only the `.encoded` version will be stored in git.
 - We'll next use KMS to encrypt the token at rest in Git:
 
 ```
 aws kms encrypt --key-id fileb://kms_key_id --plaintext fileb://secret_github --output text --query CiphertextBlob | base64 --decode > secret_github.encoded
 ```
 
+To decrypt the token you can do the following:
 ```
 aws kms decrypt --ciphertext-blob fileb://secret_github.encoded --output text --query Plaintext | base64 --decode > secret_github
 ```
