@@ -10,6 +10,8 @@ terraform {
 
 provider "aws" {}
 
+
+
 ##################################################################################################################################
 ########################### Data blocks ##########################################################################################
 
@@ -58,6 +60,11 @@ variable "rds_version" {
 variable "rds_instance_size" {
   type = "string"
   default = "db.r4.large"
+}
+
+variable "repository_uri" {
+  type = "string"
+  default = "vibrato/techtestapp"
 }
 
 ##################################################################################################################################
@@ -141,7 +148,7 @@ resource "aws_rds_cluster" "postgres_db_cluster" {
   db_subnet_group_name    = "${aws_db_subnet_group.postgres_db_cluster_subnet_group.name}"
   database_name           = "techtestdb"
   master_username         = "foo"
-  master_password         = "${file("secret_password")}"
+  master_password         = "${file("secret_postgres_password")}"
   skip_final_snapshot     = true
   
   tags {
@@ -168,6 +175,7 @@ resource "aws_rds_cluster_instance" "postgres_db_instances" {
 ##################################################################################################################################
 ########################### Load Balancer ########################################################################################
 
+# TODO review this to close down traffic to follow principle of least privilege
 resource "aws_security_group" "allow_all" {
   name        = "allow_all"
   description = "Allow all inbound traffic"
@@ -223,6 +231,7 @@ resource "aws_alb_target_group" "load_balancer-target_group" {
   port     = 3000 # todo parameterise this
   protocol = "HTTP"
   vpc_id   = "${aws_vpc.main.id}"
+  target_type   = "ip"
 }
 
 resource "aws_lb" "load_balancer" {
@@ -257,6 +266,61 @@ resource "aws_alb_listener" "load_balancer_listener" {
 }
 
 ##################################################################################################################################
+########################### ECS Preconfig ########################################################################################
+
+/*
+* IAM service role
+*/
+data "aws_iam_policy_document" "ecs_service_role" {
+  statement {
+    effect = "Allow"
+    actions = ["sts:AssumeRole"]
+    principals {
+      type = "Service"
+      identifiers = ["ecs.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ecs_role" {
+  name               = "ecs_role"
+  assume_role_policy = "${data.aws_iam_policy_document.ecs_service_role.json}"
+}
+
+data "aws_iam_policy_document" "ecs_service_policy" {
+  statement {
+    effect = "Allow"
+    resources = ["*"]
+    actions = [
+      "elasticloadbalancing:Describe*",
+      "elasticloadbalancing:DeregisterInstancesFromLoadBalancer",
+      "elasticloadbalancing:RegisterInstancesWithLoadBalancer",
+      "ec2:Describe*",
+      "ec2:AuthorizeSecurityGroupIngress"
+    ]
+  }
+}
+
+# ecs service scheduler role
+resource "aws_iam_role_policy" "ecs_service_role_policy" {
+  name   = "ecs_service_role_policy"
+  policy = "${data.aws_iam_policy_document.ecs_service_policy.json}"
+  role   = "${aws_iam_role.ecs_role.id}"
+}
+
+# role that the Amazon ECS container agent and the Docker daemon can assume
+resource "aws_iam_role" "ecs_execution_role" {
+  name               = "ecs_task_execution_role"
+  assume_role_policy = "${file("${path.module}/policies/ecs-task-execution-role.json")}"
+}
+
+resource "aws_iam_role_policy" "ecs_execution_role_policy" {
+  name   = "ecs_execution_role_policy"
+  policy = "${file("${path.module}/policies/ecs-execution-role-policy.json")}"
+  role   = "${aws_iam_role.ecs_execution_role.id}"
+}
+
+##################################################################################################################################
 ########################### ECS Setup ############################################################################################
 
 resource "aws_ecs_cluster" "cluster" {
@@ -271,9 +335,26 @@ resource "aws_ecr_repository" "techtest_app_repository" {
   name = "techtestapp"
 }
 
+data "aws_ecr_repository" "techtest_app_repository" {
+  name = "techtestapp"
+}
+
+data "template_file" "task_definition" {
+  template = "${file("${path.module}/task-definitions/techtest-frontend-task.json")}"
+
+  vars {
+    image = "${data.aws_ecr_repository.techtest_app_repository.repository_url}"
+  }
+}
+
 resource "aws_ecs_task_definition" "ecs_task" {
-  family                = "vibrato_techtest-ecs_task"
-  container_definitions = "${file("task-definitions/techtest-frontend-task.json")}"
+  family                    = "vibrato_techtest-ecs_task"
+  container_definitions     = "${data.template_file.task_definition.rendered}"
+  cpu                       = 256 #TODO Parameterize cpu/memory
+  memory                    = 512
+  network_mode              = "awsvpc"
+  requires_compatibilities  = ["FARGATE"]
+  execution_role_arn        = "${aws_iam_role.ecs_execution_role.arn}"
 }
 
 resource "aws_ecs_service" "techtest_app_frontend_service" {
@@ -292,5 +373,281 @@ resource "aws_ecs_service" "techtest_app_frontend_service" {
     target_group_arn = "${aws_alb_target_group.load_balancer-target_group.arn}"
     container_name   = "techtest-frontend"
     container_port   = 3000 # todo parameterise this
+  }
+
+  network_configuration {
+    subnets = ["${aws_subnet.private.*.id}"]
+    security_groups = ["${aws_security_group.allow_all.id}"]
+  }
+}
+
+##################################################################################################################################
+########################### Codebuild Preconfig ###################################################################################
+
+# Below is derived with a bit of help from here: https://thecode.pub/easy-deploy-your-docker-applications-to-aws-using-ecs-and-fargate-a988a1cc842f
+
+resource "aws_s3_bucket" "codebuild" {
+  bucket = "vibrato-techtest-codebuild"
+  acl    = "private"
+}
+
+resource "aws_iam_role" "codebuild_role" {
+  name = "codebuild-role"
+
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "codebuild.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy" "codebuild_policy" {
+  role = "${aws_iam_role.codebuild_role.name}"
+
+  policy = <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Resource": [
+        "*"
+      ],
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "ecr:GetAuthorizationToken",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:PutImage",
+        "ecs:RunTask",
+        "iam:PassRole"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateNetworkInterface",
+        "ec2:DescribeDhcpOptions",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DeleteNetworkInterface",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeVpcs",
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:GetBucketVersioning",
+        "s3:List*",
+        "s3:PutObject"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:*"
+      ],
+      "Resource": [
+        "${aws_s3_bucket.codebuild.arn}",
+        "${aws_s3_bucket.codebuild.arn}/*",
+        "${aws_s3_bucket.codepipeline.arn}",
+        "${aws_s3_bucket.codepipeline.arn}/*"
+      ]
+    }
+  ]
+}
+POLICY
+}
+
+##################################################################################################################################
+########################### Codepipeline Preconfig ###################################################################################
+
+resource "aws_s3_bucket" "codepipeline" {
+  bucket = "vibrato-techtest-codepipeline"
+  acl    = "private"
+}
+
+resource "aws_iam_role" "codepipeline_role" {
+  name = "vibrato_techtest-codepipeline_role"
+
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "codepipeline.amazonaws.com"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+EOF
+}
+
+resource "aws_iam_role_policy" "codepipeline_policy" {
+  name = "vibrato_techtest-codepipeline_policy"
+  role = "${aws_iam_role.codepipeline_role.id}"
+
+  policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect":"Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:GetBucketVersioning",
+        "s3:PutObject",
+        "ecs:*",
+        "events:DescribeRule",
+        "events:DeleteRule",
+        "events:ListRuleNamesByTarget",
+        "events:ListTargetsByRule",
+        "events:PutRule",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfiles",
+        "iam:ListRoles",
+        "logs:CreateLogGroup",
+        "logs:DescribeLogGroups",
+        "logs:FilterLogEvents"
+      ],
+      "Resource": [
+        "${aws_s3_bucket.codepipeline.arn}",
+        "${aws_s3_bucket.codepipeline.arn}/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "codebuild:BatchGetBuilds",
+        "codebuild:StartBuild"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+EOF
+}
+
+##################################################################################################################################
+########################### Pipeline config ######################################################################################
+
+data "template_file" "buildspec" {
+  template = "${file("${path.module}/build-specifications/buildspec.yaml")}"
+
+  vars {
+    repository_url     = "${data.aws_ecr_repository.techtest_app_repository.repository_url}"
+    region             = "${data.aws_region.current.name}"
+    cluster_name       = "${aws_ecs_cluster.cluster.name}"
+    subnet_ids         = "${join(",", aws_subnet.private.*.id)}"
+    security_group_ids = "${aws_security_group.allow_all.id}" # TODO; lockdown security groups
+  }
+}
+
+resource "aws_codebuild_project" "container_build" {
+  name          = "vibrato_techtest-container_build"
+  build_timeout = "10"
+  service_role  = "${aws_iam_role.codebuild_role.arn}"
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    compute_type    = "BUILD_GENERAL1_SMALL"
+    // https://docs.aws.amazon.com/codebuild/latest/userguide/build-env-ref-available.html
+    image           = "aws/codebuild/docker:17.09.0"
+    type            = "LINUX_CONTAINER"
+    privileged_mode = true
+  }
+
+  source {
+    type      = "CODEPIPELINE"
+    buildspec = "${data.template_file.buildspec.rendered}"
+  }
+}
+
+
+resource "aws_codepipeline" "container_build_pipeline" {
+  name     = "vibrato_techtest-container_build_pipeline"
+  role_arn = "${aws_iam_role.codepipeline_role.arn}"
+
+  artifact_store {
+    location = "${aws_s3_bucket.codepipeline.bucket}"
+    type     = "S3"
+  }
+
+  stage {
+    name = "Source"
+
+    action {
+      name             = "Source"
+      category         = "Source"
+      owner            = "ThirdParty"
+      provider         = "GitHub"
+      version          = "1"
+      output_artifacts = ["source"]
+
+      configuration {
+        Owner      = "keir-rex" # TODO; parameterize this
+        Repo       = "TechTestApp"
+        Branch     = "master"
+        OAuthToken = "${file("secret_github")}"
+      }
+    }
+  }
+
+  stage {
+    name = "Build"
+
+    action {
+      name             = "Build"
+      category         = "Build"
+      owner            = "AWS"
+      provider         = "CodeBuild"
+      version          = "1"
+      input_artifacts  = ["source"]
+      output_artifacts = ["imagedefinitions"]
+
+      configuration {
+        ProjectName = "${aws_codebuild_project.container_build.name}"
+      }
+    }
+  }
+
+  stage {
+    name = "Production"
+
+    action {
+      name            = "Deploy"
+      category        = "Deploy"
+      owner           = "AWS"
+      provider        = "ECS"
+      input_artifacts = ["imagedefinitions"]
+      version         = "1"
+
+      configuration {
+        ClusterName = "${aws_ecs_cluster.cluster.name}"
+        ServiceName = "${aws_ecs_service.techtest_app_frontend_service.name}"
+        FileName    = "imagedefinitions.json"
+      }
+    }
   }
 }
