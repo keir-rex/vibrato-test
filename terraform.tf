@@ -199,6 +199,7 @@ resource "aws_security_group" "allow_all" {
 resource "aws_s3_bucket" "alb_logs" {
   bucket = "vibrato-techtest-alb-logs"
   acl    = "private"
+  force_destroy = true # TODO; this is useful for development but should be removed or optional depending on, say: "${var.env == "production" ? false : true}"
   policy = <<EOF
 {
   "Id": "Policy",
@@ -268,9 +269,8 @@ resource "aws_alb_listener" "load_balancer_listener" {
 ##################################################################################################################################
 ########################### ECS Preconfig ########################################################################################
 
-/*
-* IAM service role
-*/
+
+# IAM service role
 data "aws_iam_policy_document" "ecs_service_role" {
   statement {
     effect = "Allow"
@@ -323,6 +323,23 @@ resource "aws_iam_role_policy" "ecs_execution_role_policy" {
 ##################################################################################################################################
 ########################### ECS Setup ############################################################################################
 
+data "aws_ecr_repository" "techtest_app_repository" {
+  name = "techtestapp"
+}
+
+data "template_file" "task_definition" {
+  template = "${file("${path.module}/task-definitions/techtest-frontend-task.json")}"
+
+  vars {
+    image = "${aws_ecr_repository.techtest_app_repository.repository_url}"
+  }
+  depends_on      = ["aws_alb_listener.load_balancer_listener"]
+}
+
+ data "aws_ecs_task_definition" "ecs_task" {
+  task_definition = "${aws_ecs_task_definition.ecs_task.family}"
+ }
+
 resource "aws_ecs_cluster" "cluster" {
   name = "vibrato_techtest-ecs-cluster"
   tags {
@@ -333,18 +350,6 @@ resource "aws_ecs_cluster" "cluster" {
 
 resource "aws_ecr_repository" "techtest_app_repository" {
   name = "techtestapp"
-}
-
-data "aws_ecr_repository" "techtest_app_repository" {
-  name = "techtestapp"
-}
-
-data "template_file" "task_definition" {
-  template = "${file("${path.module}/task-definitions/techtest-frontend-task.json")}"
-
-  vars {
-    image = "${data.aws_ecr_repository.techtest_app_repository.repository_url}"
-  }
 }
 
 resource "aws_ecs_task_definition" "ecs_task" {
@@ -360,18 +365,14 @@ resource "aws_ecs_task_definition" "ecs_task" {
 resource "aws_ecs_service" "techtest_app_frontend_service" {
   name            = "vibrato_techtest-ecs_service"
   cluster         = "${aws_ecs_cluster.cluster.id}"
-  task_definition = "${aws_ecs_task_definition.ecs_task.arn}"
+  task_definition = "${aws_ecs_task_definition.ecs_task.family}:${max("${aws_ecs_task_definition.ecs_task.revision}", "${data.aws_ecs_task_definition.ecs_task.revision}")}"
   desired_count   = 3
-  depends_on = ["aws_alb_listener.load_balancer_listener"]
-
-  ordered_placement_strategy {
-    type  = "spread"
-    field = "instanceId"
-  }
+  launch_type     = "FARGATE"
+  depends_on      = ["aws_alb_listener.load_balancer_listener"]
 
   load_balancer {
     target_group_arn = "${aws_alb_target_group.load_balancer-target_group.arn}"
-    container_name   = "techtest-frontend"
+    container_name   = "techtestapp"
     container_port   = 3000 # todo parameterise this
   }
 
@@ -389,6 +390,7 @@ resource "aws_ecs_service" "techtest_app_frontend_service" {
 resource "aws_s3_bucket" "codebuild" {
   bucket = "vibrato-techtest-codebuild"
   acl    = "private"
+  force_destroy = true # TODO; this is useful for development but should be removed or optional depending on, say: "${var.env == "production" ? false : true}"
 }
 
 resource "aws_iam_role" "codebuild_role" {
@@ -450,7 +452,8 @@ resource "aws_iam_role_policy" "codebuild_policy" {
         "s3:GetObjectVersion",
         "s3:GetBucketVersioning",
         "s3:List*",
-        "s3:PutObject"
+        "s3:PutObject",
+        "iam:PassRole"
       ],
       "Resource": "*"
     },
@@ -477,6 +480,7 @@ POLICY
 resource "aws_s3_bucket" "codepipeline" {
   bucket = "vibrato-techtest-codepipeline"
   acl    = "private"
+  force_destroy = true # TODO; this is useful for development but should be removed or optional depending on, say: "${var.env == "production" ? false : true}"
 }
 
 resource "aws_iam_role" "codepipeline_role" {
@@ -526,7 +530,8 @@ resource "aws_iam_role_policy" "codepipeline_policy" {
         "iam:ListRoles",
         "logs:CreateLogGroup",
         "logs:DescribeLogGroups",
-        "logs:FilterLogEvents"
+        "logs:FilterLogEvents",
+        "iam:PassRole"
       ],
       "Resource": [
         "${aws_s3_bucket.codepipeline.arn}",
@@ -537,7 +542,18 @@ resource "aws_iam_role_policy" "codepipeline_policy" {
       "Effect": "Allow",
       "Action": [
         "codebuild:BatchGetBuilds",
-        "codebuild:StartBuild"
+        "codebuild:StartBuild",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "ecr:GetAuthorizationToken",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:PutImage",
+        "ecs:RunTask",
+        "iam:PassRole",
+        "ecs:*"
       ],
       "Resource": "*"
     }
@@ -553,7 +569,7 @@ data "template_file" "buildspec" {
   template = "${file("${path.module}/build-specifications/buildspec.yaml")}"
 
   vars {
-    repository_url     = "${data.aws_ecr_repository.techtest_app_repository.repository_url}"
+    repository_url     = "${aws_ecr_repository.techtest_app_repository.repository_url}"
     region             = "${data.aws_region.current.name}"
     cluster_name       = "${aws_ecs_cluster.cluster.name}"
     subnet_ids         = "${join(",", aws_subnet.private.*.id)}"
