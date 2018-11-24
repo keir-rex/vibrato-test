@@ -127,6 +127,69 @@ resource "aws_internet_gateway" "main_igw" {
   }
 }
 
+resource "aws_eip" "nat_eip" {
+  count      = 3
+  vpc        = true
+  depends_on = ["aws_internet_gateway.main_igw"]
+}
+
+resource "aws_nat_gateway" "nat" {
+  count         = 3
+  allocation_id = "${element(aws_eip.nat_eip.*.id, count.index)}"
+  subnet_id     = "${element(aws_subnet.public.*.id, count.index)}"
+  depends_on    = ["aws_internet_gateway.main_igw"]
+
+  tags {
+    Name        = "vibrato_techtest-${element(data.aws_availability_zones.available.names, count.index)}-nat" # TODO; make sure this follows a concise convention
+    project     = "vibrato-techtest" # TODO; parameterize this
+  }
+}
+
+# Routing table for private subnet
+resource "aws_route_table" "private" {
+  vpc_id = "${aws_vpc.main.id}"
+
+  tags {
+    Name        = "vibrato_techtest-private_route_table" # TODO; make sure this follows a concise convention
+    project     = "vibrato-techtest" # TODO; parameterize this
+  }
+}
+
+# Routing table for public subnet
+resource "aws_route_table" "public" {
+  vpc_id = "${aws_vpc.main.id}"
+
+  tags {
+    Name        = "vibrato_techtest-public_route_table" # TODO; make sure this follows a concise convention
+    project     = "vibrato-techtest" # TODO; parameterize this
+  }
+}
+
+resource "aws_route" "public_internet_gateway_route" {
+  route_table_id         = "${aws_route_table.public.id}"
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = "${aws_internet_gateway.main_igw.id}"
+}
+
+resource "aws_route" "private_nat_gateway_route" {
+  route_table_id         = "${aws_route_table.private.id}"
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = "${element(aws_nat_gateway.nat.*.id, count.index)}"
+}
+
+# Route table associations
+resource "aws_route_table_association" "public" {
+  count          = "${length(var.public_subnets)}"
+  subnet_id      = "${element(aws_subnet.public.*.id, count.index)}"
+  route_table_id = "${aws_route_table.public.id}"
+}
+
+resource "aws_route_table_association" "private" {
+  count           = "${length(var.private_subnets)}"
+  subnet_id       = "${element(aws_subnet.private.*.id, count.index)}"
+  route_table_id  = "${aws_route_table.private.id}"
+}
+
 ##################################################################################################################################
 ########################### DB Setup #############################################################################################
 
