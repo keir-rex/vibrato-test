@@ -1,8 +1,10 @@
 [
   {
-    "name": "techtest-frontend",
+    "name": "techtestapp",
     "image": "${image}",
     "essential": true,
+    "memory": 300,
+    "networkMode": "awsvpc",
     "portMappings": [
       {
         "containerPort": 3000,
