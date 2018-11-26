@@ -2,6 +2,8 @@
   {
     "name": "techtestapp",
     "image": "${image}",
+    "entryPoint": ["/TechTestApp/TechTestApp"],
+    "command": ["serve"],
     "essential": true,
     "memory": 300,
     "networkMode": "awsvpc",

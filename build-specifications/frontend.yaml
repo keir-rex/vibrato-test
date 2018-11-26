@@ -9,14 +9,15 @@ phases:
       - $(aws ecr get-login --region ${region} --no-include-email)
       - REPOSITORY_URI=${repository_url}
       - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - echo "IMAGETAG $IMAGE_TAG"
       - echo Entered the pre_build phase...
   build:
     commands:
       - echo Build started on `date`
       - echo Building the Docker image...
       - docker build -t $REPOSITORY_URI:latest .
-      - echo "$(docker images)"
       - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+      - echo "$(docker images)"
   post_build:
     commands:
       - echo Build completed on `date`

@@ -306,11 +306,11 @@ resource "aws_lb" "load_balancer" {
   subnets            = ["${aws_subnet.public.*.id}"]
 
   # Uncomment after development as it makes it easier to iterate 
-  # access_logs {
-  #   bucket  = "${aws_s3_bucket.alb_logs.bucket}"
-  #   prefix  = "vibrato_techtest"
-  #   enabled = true
-  # }
+  access_logs {
+    bucket  = "${aws_s3_bucket.alb_logs.bucket}"
+    prefix  = "vibrato_techtest"
+    enabled = true
+  }
 
   tags {
     Name        = "vibrato_techtest-s3-alb_logs"
@@ -390,8 +390,8 @@ data "aws_ecr_repository" "techtest_app_repository" {
   name = "techtestapp"
 }
 
-data "template_file" "task_definition" {
-  template = "${file("${path.module}/task-definitions/techtest-frontend-task.json")}"
+data "template_file" "container_definition" {
+  template = "${file("${path.module}/container-definitions/frontend.json")}"
 
   vars {
     image = "${aws_ecr_repository.techtest_app_repository.repository_url}"
@@ -417,7 +417,7 @@ resource "aws_ecr_repository" "techtest_app_repository" {
 
 resource "aws_ecs_task_definition" "ecs_task" {
   family                    = "vibrato_techtest-ecs_task"
-  container_definitions     = "${data.template_file.task_definition.rendered}"
+  container_definitions     = "${data.template_file.container_definition.rendered}"
   cpu                       = 256 #TODO Parameterize cpu/memory
   memory                    = 512
   network_mode              = "awsvpc"
@@ -438,6 +438,19 @@ resource "aws_ecs_service" "techtest_app_frontend_service" {
     container_name   = "techtestapp"
     container_port   = 3000 # todo parameterise this
   }
+
+  network_configuration {
+    subnets = ["${aws_subnet.private.*.id}"]
+    security_groups = ["${aws_security_group.allow_all.id}"]
+  }
+}
+
+resource "aws_ecs_service" "techtest_app_seed_db" {
+  name            = "vibrato_techtest-ecs_service"
+  cluster         = "${aws_ecs_cluster.cluster.id}"
+  task_definition = "${aws_ecs_task_definition.ecs_task.family}:${max("${aws_ecs_task_definition.ecs_task.revision}", "${data.aws_ecs_task_definition.ecs_task.revision}")}"
+  desired_count   = 1
+  launch_type     = "FARGATE"
 
   network_configuration {
     subnets = ["${aws_subnet.private.*.id}"]
@@ -626,10 +639,10 @@ EOF
 }
 
 ##################################################################################################################################
-########################### Pipeline config ######################################################################################
+########################### Frontend Pipeline config ######################################################################################
 
-data "template_file" "buildspec" {
-  template = "${file("${path.module}/build-specifications/buildspec.yaml")}"
+data "template_file" "frontend-buildspec" {
+  template = "${file("${path.module}/build-specifications/frontend.yaml")}"
 
   vars {
     repository_url     = "${aws_ecr_repository.techtest_app_repository.repository_url}"
@@ -659,7 +672,7 @@ resource "aws_codebuild_project" "container_build" {
 
   source {
     type      = "CODEPIPELINE"
-    buildspec = "${data.template_file.buildspec.rendered}"
+    buildspec = "${data.template_file.frontend-buildspec.rendered}"
   }
 }
 
