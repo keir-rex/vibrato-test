@@ -12,6 +12,36 @@
         "containerPort": 3000,
         "hostPort": 3000
       }
+    ],
+    "environment": [
+      {
+        "name": "VTT_DBUSER",
+        "value": "${db_user}"
+      },
+      {
+        "name": "VTT_DBPASSWORD",
+        "value": "${db_password}"
+      },
+      {
+        "name": "VTT_DBNAME",
+        "value": "${db_name}"
+      },
+      {
+        "name": "VTT_DBPORT",
+        "value": "${db_port}"
+      },
+      {
+        "name": "VTT_DBHOST",
+        "value": "${db_host}"
+      },
+      {
+        "name": "VTT_LISTENHOST",
+        "value": "${listen_host}"
+      },
+      {
+        "name": "VTT_LISTENPORT",
+        "value": "${listen_port}"
+      }
     ]
   }
 ]
