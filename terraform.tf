@@ -123,11 +123,11 @@ resource "aws_vpc" "main" {
 
 # Create a group of public subnets; one for each AZ within the region we launched our VPC
 resource "aws_subnet" "public" {
-  count      = "${length(var.public_subnets)}"
-  vpc_id     = "${aws_vpc.main.id}"
-  cidr_block = "${var.public_subnets[count.index]}"
-  availability_zone = "${data.aws_availability_zones.available.names[count.index]}"
-  
+  count                   = "${length(var.public_subnets)}"
+  vpc_id                  = "${aws_vpc.main.id}"
+  cidr_block              = "${var.public_subnets[count.index]}"
+  availability_zone       = "${data.aws_availability_zones.available.names[count.index]}"
+  map_public_ip_on_launch = true
   tags {
     Name = "vibrato_techtest-subnet-public-${data.aws_availability_zones.available.names[count.index]}"
     project = "vibrato-techtest"
@@ -217,6 +217,60 @@ resource "aws_route_table_association" "private" {
   count           = "${length(var.private_subnets)}"
   subnet_id       = "${element(aws_subnet.private.*.id, count.index)}"
   route_table_id  = "${aws_route_table.private.id}"
+}
+
+
+##################################################################################################################################
+########################### Bastion Host Setup ###################################################################################
+
+resource "aws_security_group" "allow_ssh" {
+  name        = "allow_ssh"
+  description = "Allow all inbound traffic"
+  vpc_id      = "${aws_vpc.main.id}"
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port       = 0
+    to_port         = 0
+    protocol        = "-1"
+    cidr_blocks     = ["0.0.0.0/0"]
+  }
+}
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-trusty-14.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  owners = ["099720109477"] # Canonical
+}
+
+resource "aws_instance" "bastion_host" {
+  ami                           = "${data.aws_ami.ubuntu.id}"
+  instance_type                 = "t2.micro"
+  associate_public_ip_address   = true
+  availability_zone             = "${data.aws_availability_zones.available.names[0]}"
+  subnet_id                     = "${aws_subnet.public.*.id[0]}"
+  vpc_security_group_ids        = ["${aws_security_group.allow_ssh.id}"]
+
+  tags {
+    Name = "vibrato_techtest-bastion_host"
+    project = "vibrato-techtest"
+  }
 }
 
 ##################################################################################################################################
