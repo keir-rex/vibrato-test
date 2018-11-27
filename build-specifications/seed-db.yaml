@@ -25,6 +25,6 @@ phases:
       - echo Writing image definitions file...
       - printf '[{"name":"techtestapp","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
       - echo upgrading db-migrate task definitions
-      - aws ecs run-task --launch-type FARGATE --cluster ${cluster_name} --task-definition vibrato_techtest-seed_db_task --network-configuration "awsvpcConfiguration={subnets=[${subnet_ids}],securityGroups=[${security_group_ids}]}"
+      - aws ecs run-task --launch-type FARGATE --cluster ${cluster_name} --task-definition ${task_definition} --network-configuration "awsvpcConfiguration={subnets=[${subnet_ids}],securityGroups=[${security_group_ids}]}"
 artifacts:
   files: imagedefinitions.json

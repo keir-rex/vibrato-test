@@ -5,7 +5,14 @@
     "entryPoint": ["/TechTestApp/TechTestApp"],
     "command": ["serve"],
     "essential": true,
-    "memory": 300,
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "${log_group}",
+        "awslogs-region": "ap-southeast-2",
+        "awslogs-stream-prefix": "vibrato_techtest-frontend"
+      }
+    },
     "networkMode": "awsvpc",
     "portMappings": [
       {
@@ -16,31 +23,31 @@
     "environment": [
       {
         "name": "VTT_DBUSER",
-        "value": "${db_user}"
+        "value": "${dbuser}"
       },
       {
         "name": "VTT_DBPASSWORD",
-        "value": "${db_password}"
+        "value": "${dbpassword}"
       },
       {
         "name": "VTT_DBNAME",
-        "value": "${db_name}"
+        "value": "${dbname}"
       },
       {
         "name": "VTT_DBPORT",
-        "value": "${db_port}"
+        "value": "${dbport}"
       },
       {
         "name": "VTT_DBHOST",
-        "value": "${db_host}"
+        "value": "${dbhost}"
       },
       {
         "name": "VTT_LISTENHOST",
-        "value": "${listen_host}"
+        "value": "${listenhost}"
       },
       {
         "name": "VTT_LISTENPORT",
-        "value": "${listen_port}"
+        "value": "${listenport}"
       }
     ]
   }

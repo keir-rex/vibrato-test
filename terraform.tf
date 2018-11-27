@@ -67,6 +67,35 @@ variable "repository_uri" {
   default = "vibrato/techtestapp"
 }
 
+variable "dbuser" {
+  type = "string"
+  default = "foo"
+}
+
+variable "dbname" {
+  type = "string"
+  default = "techtestdb"
+}
+
+variable "dbport" {
+  type = "string"
+  default = "5432"
+}
+
+# variable "dbhost" {
+#   type = "string"
+# }
+
+variable "listenhost" {
+  type = "string"
+  default = "0.0.0.0"
+}
+
+variable "listenport" {
+  type = "string"
+  default = "3000"
+}
+
 ##################################################################################################################################
 ########################### Secrets Setup ########################################################################################
 
@@ -209,8 +238,8 @@ resource "aws_rds_cluster" "postgres_db_cluster" {
   engine_version          = "${var.rds_version}"
   availability_zones      = ["${data.aws_availability_zones.available.names[0]}","${data.aws_availability_zones.available.names[1]}","${data.aws_availability_zones.available.names[2]}"]
   db_subnet_group_name    = "${aws_db_subnet_group.postgres_db_cluster_subnet_group.name}"
-  database_name           = "techtestdb"
-  master_username         = "foo"
+  database_name           = "techtestdb" # TODO; parameterise this
+  master_username         = "foo" # TODO; parameterise this
   master_password         = "${file("secret_postgres_password")}"
   skip_final_snapshot     = true
   
@@ -384,24 +413,64 @@ resource "aws_iam_role_policy" "ecs_execution_role_policy" {
 }
 
 ##################################################################################################################################
+########################### Log Setup ############################################################################################
+
+resource "aws_cloudwatch_log_group" "logs" {
+  name = "vibrato_techtest-logs"
+
+  tags {
+    project = "vibrato-techtest"
+  }
+}
+
+##################################################################################################################################
 ########################### ECS Setup ############################################################################################
 
 data "aws_ecr_repository" "techtest_app_repository" {
   name = "techtestapp"
 }
 
-data "template_file" "container_definition" {
+data "aws_ecs_task_definition" "frontend_task" {
+  task_definition = "${aws_ecs_task_definition.frontend_task.family}"
+ }
+
+data "aws_ecs_task_definition" "seed_db_task" {
+  task_definition = "${aws_ecs_task_definition.seed_db_task.family}"
+ }
+
+data "template_file" "frontend_container_definition" {
   template = "${file("${path.module}/container-definitions/frontend.json")}"
 
   vars {
-    image = "${aws_ecr_repository.techtest_app_repository.repository_url}"
+    image         = "${aws_ecr_repository.techtest_app_repository.repository_url}"
+    dbuser        = "${var.dbuser}"
+    dbpassword    = "${file("secret_postgres_password")}"
+    dbname        = "${var.dbname}"
+    dbport        = "${var.dbport}"
+    dbhost        = "${aws_rds_cluster.postgres_db_cluster.endpoint}"
+    listenhost    = "${var.listenhost}"
+    listenport    = "${var.listenport}"
+    log_group     = "${aws_cloudwatch_log_group.logs.name}"
   }
   depends_on      = ["aws_alb_listener.load_balancer_listener"]
 }
 
- data "aws_ecs_task_definition" "ecs_task" {
-  task_definition = "${aws_ecs_task_definition.ecs_task.family}"
- }
+data "template_file" "seed_db_container_definition" {
+  template = "${file("${path.module}/container-definitions/seed-db.json")}"
+
+  vars {
+    image = "${aws_ecr_repository.techtest_app_repository.repository_url}"
+    task  = "vibrato_techtest-seed_db_task" # todo paramerise this
+    dbuser        = "${var.dbuser}"
+    dbpassword    = "${file("secret_postgres_password")}"
+    dbname        = "${var.dbname}"
+    dbport        = "${var.dbport}"
+    dbhost        = "${aws_rds_cluster.postgres_db_cluster.endpoint}"
+    listenhost    = "${var.listenhost}"
+    listenport    = "${var.listenport}"
+    log_group     = "${aws_cloudwatch_log_group.logs.name}"
+  }
+}
 
 resource "aws_ecs_cluster" "cluster" {
   name = "vibrato_techtest-ecs-cluster"
@@ -415,9 +484,19 @@ resource "aws_ecr_repository" "techtest_app_repository" {
   name = "techtestapp"
 }
 
-resource "aws_ecs_task_definition" "ecs_task" {
+resource "aws_ecs_task_definition" "frontend_task" {
   family                    = "vibrato_techtest-ecs_task"
-  container_definitions     = "${data.template_file.container_definition.rendered}"
+  container_definitions     = "${data.template_file.frontend_container_definition.rendered}"
+  cpu                       = 256 #TODO Parameterize cpu/memory
+  memory                    = 512
+  network_mode              = "awsvpc"
+  requires_compatibilities  = ["FARGATE"]
+  execution_role_arn        = "${aws_iam_role.ecs_execution_role.arn}"
+}
+
+resource "aws_ecs_task_definition" "seed_db_task" {
+  family                    = "vibrato_techtest-seed_db_task"
+  container_definitions     = "${data.template_file.seed_db_container_definition.rendered}"
   cpu                       = 256 #TODO Parameterize cpu/memory
   memory                    = 512
   network_mode              = "awsvpc"
@@ -428,7 +507,7 @@ resource "aws_ecs_task_definition" "ecs_task" {
 resource "aws_ecs_service" "techtest_app_frontend_service" {
   name            = "vibrato_techtest-ecs_service"
   cluster         = "${aws_ecs_cluster.cluster.id}"
-  task_definition = "${aws_ecs_task_definition.ecs_task.family}:${max("${aws_ecs_task_definition.ecs_task.revision}", "${data.aws_ecs_task_definition.ecs_task.revision}")}"
+  task_definition = "${aws_ecs_task_definition.frontend_task.family}:${max("${aws_ecs_task_definition.frontend_task.revision}", "${data.aws_ecs_task_definition.frontend_task.revision}")}"
   desired_count   = 3
   launch_type     = "FARGATE"
   depends_on      = ["aws_alb_listener.load_balancer_listener"]
@@ -438,19 +517,6 @@ resource "aws_ecs_service" "techtest_app_frontend_service" {
     container_name   = "techtestapp"
     container_port   = 3000 # todo parameterise this
   }
-
-  network_configuration {
-    subnets = ["${aws_subnet.private.*.id}"]
-    security_groups = ["${aws_security_group.allow_all.id}"]
-  }
-}
-
-resource "aws_ecs_service" "techtest_app_seed_db" {
-  name            = "vibrato_techtest-ecs_service"
-  cluster         = "${aws_ecs_cluster.cluster.id}"
-  task_definition = "${aws_ecs_task_definition.ecs_task.family}:${max("${aws_ecs_task_definition.ecs_task.revision}", "${data.aws_ecs_task_definition.ecs_task.revision}")}"
-  desired_count   = 1
-  launch_type     = "FARGATE"
 
   network_configuration {
     subnets = ["${aws_subnet.private.*.id}"]
@@ -639,15 +705,120 @@ EOF
 }
 
 ##################################################################################################################################
-########################### Frontend Pipeline config ######################################################################################
+########################### seed-db Pipeline config ######################################################################################
 
-data "template_file" "frontend-buildspec" {
-  template = "${file("${path.module}/build-specifications/frontend.yaml")}"
+data "template_file" "seed_db_buildspec" {
+  template = "${file("${path.module}/build-specifications/seed-db.yaml")}"
 
   vars {
     repository_url     = "${aws_ecr_repository.techtest_app_repository.repository_url}"
     region             = "${data.aws_region.current.name}"
     cluster_name       = "${aws_ecs_cluster.cluster.name}"
+    subnet_ids         = "${join(",", aws_subnet.private.*.id)}"
+    task_definition    = "vibrato_techtest-seed_db_task" # TODO; parameterize this
+    security_group_ids = "${aws_security_group.allow_all.id}" # TODO; lockdown security groups
+  }
+}
+
+resource "aws_codebuild_project" "seed_db" {
+  name          = "vibrato_techtest-seed_db-container_build"
+  build_timeout = "10"
+  service_role  = "${aws_iam_role.codebuild_role.arn}"
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    compute_type    = "BUILD_GENERAL1_SMALL"
+    // https://docs.aws.amazon.com/codebuild/latest/userguide/build-env-ref-available.html
+    image           = "aws/codebuild/docker:17.09.0"
+    type            = "LINUX_CONTAINER"
+    privileged_mode = true
+  }
+
+  source {
+    type      = "CODEPIPELINE"
+    buildspec = "${data.template_file.seed_db_buildspec.rendered}"
+  }
+}
+
+
+resource "aws_codepipeline" "seed_db_pipeline" {
+  name     = "vibrato_techtest-seed_db_pipeline"
+  role_arn = "${aws_iam_role.codepipeline_role.arn}"
+
+  artifact_store {
+    location = "${aws_s3_bucket.codepipeline.bucket}"
+    type     = "S3"
+  }
+
+  stage {
+    name = "Source"
+
+    action {
+      name             = "Source"
+      category         = "Source"
+      owner            = "ThirdParty"
+      provider         = "GitHub"
+      version          = "1"
+      output_artifacts = ["source"]
+
+      configuration {
+        Owner      = "keir-rex" # TODO; parameterize this
+        Repo       = "TechTestApp"
+        Branch     = "master"
+        OAuthToken = "${file("secret_github")}"
+      }
+    }
+  }
+
+  stage {
+    name = "Build"
+
+    action {
+      name             = "Build"
+      category         = "Build"
+      owner            = "AWS"
+      provider         = "CodeBuild"
+      version          = "1"
+      input_artifacts  = ["source"]
+      output_artifacts = ["imagedefinitions"]
+
+      configuration {
+        ProjectName = "${aws_codebuild_project.seed_db.name}"
+      }
+    }
+  }
+
+  stage {
+    name = "Production"
+
+    action {
+      name            = "Deploy"
+      category        = "Deploy"
+      owner           = "AWS"
+      provider        = "ECS"
+      input_artifacts = ["imagedefinitions"]
+      version         = "1"
+
+      configuration {
+        ClusterName = "${aws_ecs_cluster.cluster.name}"
+        ServiceName = "${aws_ecs_service.techtest_app_frontend_service.name}"
+        FileName    = "imagedefinitions.json"
+      }
+    }
+  }
+}
+##################################################################################################################################
+########################### Frontend Pipeline config #############################################################################
+
+data "template_file" "frontend_buildspec" {
+  template = "${file("${path.module}/build-specifications/frontend.yaml")}"
+
+  vars {
+    repository_url     = "${aws_ecr_repository.techtest_app_repository.repository_url}"
+    region             = "${data.aws_region.current.name}"
     subnet_ids         = "${join(",", aws_subnet.private.*.id)}"
     security_group_ids = "${aws_security_group.allow_all.id}" # TODO; lockdown security groups
   }
@@ -672,7 +843,7 @@ resource "aws_codebuild_project" "container_build" {
 
   source {
     type      = "CODEPIPELINE"
-    buildspec = "${data.template_file.frontend-buildspec.rendered}"
+    buildspec = "${data.template_file.frontend_buildspec.rendered}"
   }
 }
 
